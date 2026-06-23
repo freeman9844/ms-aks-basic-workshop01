@@ -86,7 +86,7 @@ Status:
     Cpu:     2                                          # 이 NodePool 노드들의 총 vCPU
     Memory:  4007656Ki
 ```
-> 위 `Requirements`를 보면 기본 NodePool은 **amd64 / linux / on-demand / D 계열 SKU** 노드만 만듭니다. Pending Pod가 이 제약과 맞지 않으면(예: arm64 요구, Spot 요구) 기본 NodePool로는 노드가 안 생기고, 4)의 심화처럼 **별도 NodePool**이 필요합니다.
+> 위 `Requirements`를 보면 기본 NodePool은 **amd64 / linux / on-demand / D 계열 SKU** 노드만 만듭니다. Pending Pod가 이 제약과 맞지 않으면(예: arm64 요구, Spot 요구) 기본 NodePool로는 노드가 안 생기고, 5)의 심화처럼 **별도 NodePool**이 필요합니다.
 > - `spec.limits.cpu`(이 예시엔 미설정)를 지정하면 이 NodePool이 만들 수 있는 **총 vCPU 상한**으로 노드 폭주를 막을 수 있습니다.
 > - `Expire After`는 노드 최대 수명으로, 값을 주면(예: `168h`) 주기적 롤링 교체로 노드 OS/패치를 최신화합니다(기본 `Never`).
 
@@ -151,21 +151,31 @@ Events:
 
 ## 3) NAP 노드 자동 프로비저닝 관찰
 
-NAP/Karpenter가 Pending Pod를 감지하고 **NodeClaim → VM → Ready** 순으로 노드를 만드는 과정을 이벤트로 관찰합니다.
+NAP/Karpenter가 Pending Pod를 감지하고 **NodeClaim → VM → Ready** 순으로 노드를 만드는 과정을 관찰합니다. **① 먼저 이벤트로 진행 과정을 보고 → ② `kubectl get nodes`로 신규 노드가 Ready 되는지 확인**하는 순서가 보기 편합니다.
+
+**① 이벤트로 노드 생성 과정 확인**
 ```bash
 # Karpenter 이벤트 스냅샷(최근순). 몇 초 간격으로 반복 실행하면 진행 과정이 보입니다
 kubectl get events -A --field-selector source=karpenter --sort-by=.lastTimestamp
 # 연속 관찰을 원하면: watch -n 2 "kubectl get events -A --field-selector source=karpenter --sort-by=.lastTimestamp"
 ```
-예상 이벤트(요지):
+예상 이벤트:
 ```text
-default   Normal   Nominated     nodeclaim/default-xxxxx   ... created nodeclaim
-default   Normal   Launched      nodeclaim/default-xxxxx   ... launched instance Standard_D4s_v5
-default   Normal   Registered    node/aks-default-xxxxx    ... registered node
-default   Normal   Ready         node/aks-default-xxxxx    ... node is ready
+pets       109s   Normal   Nominated           pod/nap-stress-84dfcbf885-4wcff   Pod should schedule on: nodeclaim/default-ntmx4
+default    105s   Normal   Launched            nodeclaim/default-ntmx4           Status condition transitioned, Type: Launched, Status: Unknown -> True, Reason: Launched
+default    102s   Normal   DisruptionBlocked   nodeclaim/default-ntmx4           Nodeclaim does not have an associated node
+default    41s    Normal   Registered          nodeclaim/default-ntmx4           Status condition transitioned, Type: Registered, Status: Unknown -> True, Reason: Registered
+default    32s    Normal   Ready               node/aks-default-ntmx4            Status condition transitioned, Type: Ready, Status: False -> True, Reason: KubeletReady, Message: kubelet is posting ready status
+default    32s    Normal   DisruptionBlocked   node/aks-default-ntmx4            Node isn't initialized
+default    22s    Normal   Ready               nodeclaim/default-ntmx4           Status condition transitioned, Type: Ready, Status: Unknown -> True, Reason: Ready
+default    22s    Normal   Initialized         nodeclaim/default-ntmx4           Status condition transitioned, Type: Initialized, Status: Unknown -> True, Reason: Initialized
 ```
-> NAP는 **Pending Pod의 요청량(3 vCPU)에 맞춰 노드 SKU를 고릅니다.** 최소사양 노드(`Standard_D2s_v5` = 2 vCPU)로는 3 vCPU를 담을 수 없으므로, NAP가 더 큰 SKU(예: 4 vCPU `Standard_D4s_v5`)를 자동 선택합니다. 이렇게 **워크로드에 맞게 노드를 right-sizing**하는 것이 NAP의 핵심입니다(고정 노드풀과의 차이). 만들 수 있는 SKU/용량은 `NodePool`의 `requirements`·`limits`로 제한할 수 있습니다(아래 4절).
-NodeClaim과 노드 추가를 함께 확인합니다.
+> Pending이던 `nap-stress` Pod가 새 NodeClaim에 **Nominated**되고 → VM이 **Launched** → 노드 **Registered/Ready** → NodeClaim **Initialized** 순으로 진행됩니다. 중간의 `DisruptionBlocked`(*Nodeclaim does not have an associated node* / *Node isn't initialized*)는 **부팅 중이라 아직 통합 대상이 아니라는 정상 메시지**로, 노드가 Ready되면 사라집니다.
+> NAP는 **Pending Pod의 요청량(3 vCPU)에 맞춰 노드 SKU를 고릅니다.** 최소사양 노드(`Standard_D2s_v5` = 2 vCPU)로는 3 vCPU를 담을 수 없으므로, NAP가 더 큰 SKU(예: 4 vCPU `Standard_D4s_v5`)를 자동 선택합니다. 이렇게 **워크로드에 맞게 노드를 right-sizing**하는 것이 NAP의 핵심입니다(고정 노드풀과의 차이). 만들 수 있는 SKU/용량은 `NodePool`의 `requirements`·`limits`로 제한할 수 있습니다(아래 5절).
+
+**② NodeClaim·신규 노드 확인**
+
+`Ready` 이벤트가 보이면 `kubectl get nodes`로 실제 노드 추가를 확인합니다.
 ```bash
 kubectl get nodeclaim                # 진행 중인 노드 요청
 kubectl get nodes                    # 몇 초 간격으로 반복 실행 → 신규 aks-default-* 가 Ready 되는지 확인
@@ -198,337 +208,244 @@ aks-default-fghij                Ready    <none>   60s   v1.34.x   Standard_D4s_
 > 시스템 노드(`aks-system-*`)는 NAP가 아니라 AKS가 관리하므로 `CAPACITY-TYPE`/`NODEPOOL`이 비어 있습니다. NAP 노드(`aks-default-*`)만 라벨이 채워집니다. 특정 노드 하나만 자세히 보려면 `kubectl describe node aks-default-fghij | grep -E 'instance-type|capacity-type|nodepool|sku'`를 사용하세요.
 > `nap-stress`(3 vCPU 요청)를 담기 위해 2 vCPU 노드(`D2s_v5`) 대신 **4 vCPU 노드(`D4s_v5`)** 가 선택된 것이 NAP의 right-sizing 동작입니다.
 
-### 💡 노드를 계속 모니터링하면 일어나는 일 — 통합(Consolidation)으로 다시 축소
+## 4) 노드 축소(scale-in / consolidation) 관찰
 
-> **이 모듈에서 가장 중요한 동작입니다.** NAP는 노드를 **늘리기만** 하는 게 아니라, 부하가 줄면 **저활용 노드를 자동으로 비우고 제거(Consolidation)** 해 비용을 회수합니다. 확장(2~3절)과 이 자동 축소가 한 쌍으로 동작한다는 점이 핵심입니다.
-
-노드가 2개로 늘어난 뒤 잠시 더 관찰하면, **노드 수가 다시 1개로 줄어드는 것**을 볼 수 있습니다. 이는 버그가 아니라 NAP의 **통합(Consolidation)** 동작으로, 저활용 노드를 비우고 제거해 비용을 회수하는 정상 과정입니다. 기본 NodePool 정책이 `consolidationPolicy: WhenEmptyOrUnderutilized` + `consolidateAfter: 0s`이기 때문입니다(1절의 `describe nodepool` 출력 참고).
+부하(`nap-stress`)를 제거하면 방금 만든 4 vCPU 노드가 **비게 되어(Empty)** NAP가 회수합니다. 빈 노드 회수는 다른 노드의 Pod를 축출하지 않으므로 `istiod` PDB와 무관하게 **결정적으로** 진행됩니다(보통 `consolidateAfter: 0s` + 종료 유예로 30초~수 분). 확장 때와 똑같이 **① 이벤트로 회수 과정을 보고 → ② `kubectl get nodes`로 노드가 사라지는지 확인**합니다.
 
 ```bash
-# 노드 수 변화를 반복 조회 (2개로 늘었다가 다시 1개로 줄어드는지)
-kubectl get nodes -L node.kubernetes.io/instance-type,karpenter.sh/nodepool
-# 통합 과정의 이벤트를 최근순으로 확인
-kubectl get events -A --field-selector source=karpenter --sort-by=.lastTimestamp
+kubectl delete deployment nap-stress -n pets   # 부하 제거 → 노드가 비워짐
 ```
-통합이 일어날 때 이벤트는 대략 아래 순서로 나타납니다.
+
+**① 이벤트로 노드 회수 과정 확인**
+```bash
+# Karpenter가 빈 노드를 회수하는 과정 스냅샷(최근순) — 몇 초 간격으로 반복 실행
+kubectl get events -A --field-selector source=karpenter --sort-by=.lastTimestamp   # Disrupted/Deleted 이벤트
+```
+예상 이벤트:
 ```text
-# 1) 새 노드가 떠서 워크로드를 더 적은 노드에 담을 수 있게 되자, 기존 노드를 저활용으로 판단
-default  Normal   DisruptionTerminating   node/aks-default-dj77v   Disrupting Node: Underutilized
-# 2) 기존 노드의 Pod들을 다른 노드로 쫓아내고(Evicted) 재배치(Nominated)
-pets     Normal   Evicted     pod/mongodb-0          Evicted pod: Underutilized
-pets     Normal   Nominated   pod/mongodb-0          Pod should schedule on: node/aks-default-v57bb
-# 3) PodDisruptionBudget(PDB) 때문에 드레이닝이 잠시 막히거나 재시도될 수 있음
-#    (아래 PDB 이름은 모듈 05를 따른 경우(app-routing/istiod) 예시입니다. 05.1(AGC)을
-#     따랐다면 Istio가 설치되지 않아 aks-istio-system/istiod PDB 자체가 없으므로 이 줄은
-#     아예 나타나지 않고 통합이 바로 진행될 수 있습니다(또는 kube-system의 alb-controller
-#     PDB가 있으면 그것이 잠깐 차단 원인일 수 있습니다).)
-default  Normal   DisruptionBlocked   nodeclaim/...   Pdb prevents pod evictions (PodDisruptionBudget=[aks-istio-system/istiod])
-default  Warning  FailedDraining      node/...        Failed to drain node, N pods are waiting to be evicted
-# 4) 드레이닝 완료 후 기존 노드 종료 → 노드 수 2→1로 복귀
-default  Normal   Drained     nodeclaim/aks-default-dj77v   ...
-default  Normal   Finalized   nodeclaim                     Finalized karpenter.sh/termination
-# 5) 남은 노드는 더 싼 노드로 못 바꾼다고 판단해 그대로 유지
-default  Normal   Unconsolidatable   node/aks-default-v57bb   Can't replace with a cheaper node
+default    34s    Normal   DisruptionTerminating   nodeclaim/default-ntmx4   Disrupting NodeClaim: Empty
+default    34s    Normal   DisruptionTerminating   node/aks-default-ntmx4    Disrupting Node: Empty
+default    24s    Normal   DisruptionBlocked       node/aks-default-ntmx4    Node is deleting or marked for deletion
+default    24s    Normal   DisruptionBlocked       nodeclaim/default-ntmx4   Node is deleting or marked for deletion
+default    18s    Normal   Drained                 nodeclaim/default-ntmx4   Status condition transitioned, Type: Drained, Status: Unknown -> True, Reason: Drained
+default    17s    Normal   Finalized               nodeclaim                 Finalized karpenter.sh/termination
+default    17s    Normal   Finalized               node                      Finalized karpenter.sh/termination
 ```
-일어나는 일과 이유를 정리하면:
+> `nap-stress`가 사라져 노드가 비면 NAP가 **Empty**로 판단해 `DisruptionTerminating`을 시작하고, 노드를 **Drained**(남은 Pod 비움) → **Finalized**(정리 완료) 순으로 회수합니다(노드 수 2→1). 종료 중 나타나는 `DisruptionBlocked`(*Node is deleting or marked for deletion*)는 **이미 삭제 중이라 추가 통합 대상이 아니라는 정상 메시지**입니다.
 
-| 이벤트 | 의미 | 이유 |
-|---|---|---|
-| `DisruptionTerminating: Underutilized` | 저활용 노드를 비우기 시작 | 새 노드가 생겨 워크로드를 더 적은 노드에 bin-packing 가능 → 작은 노드가 불필요 |
-| `Evicted: Underutilized` → `Nominated` | 해당 노드의 Pod를 다른 노드로 이주 | 노드를 비워야 안전하게 제거 가능. KEDA/Deployment가 Pod를 다시 띄움 |
-| `DisruptionBlocked: Pdb prevents pod evictions` | 드레이닝이 일시 차단 | `istiod`(모듈 05) 등에 **PodDisruptionBudget**이 걸려 동시 축출 수를 제한(가용성 보호). 잠시 후 재시도로 진행. *05.1(AGC) 사용 시엔 `istiod` PDB가 없어 이 차단이 나타나지 않을 수 있으며, `kube-system`의 `alb-controller`에 PDB가 있으면 그것이 차단 원인일 수 있음* |
-| `FailedDraining: N pods waiting` | 드레이닝 일시 실패 | 위 PDB·종료 유예(graceful termination) 때문에 일시적. 재시도로 해소되는 정상 현상 |
-| `Drained` / `Finalized` | 노드 비움 완료 후 삭제 | 모든 Pod 이주 완료 → VM 회수(비용 절감) |
-| `Unconsolidatable: Can't replace with a cheaper node` | 더 통합/교체할 게 없음 | 남은 노드가 이미 최적. 안정 상태 도달 |
-| `VMEventScheduled ... IMDS unavailable` | (무해) 예약 유지보수 이벤트 조회 실패 | IMDS 일시 불가. 노드 동작과 무관, 무시 가능 |
+**② 노드 축소 확인**
 
-> 핵심: NAP는 Pending이 생기면 **확장(노드 추가)**, 노드가 저활용이면 **통합(노드 제거)** 으로 **양방향 right-sizing**을 자동 수행합니다. 그래서 부하 테스트 직후 노드가 잠깐 늘었다가 다시 줄어드는 것은 의도된 비용 최적화 동작입니다. (통합 정책을 직접 바꿔 보는 실습은 아래 [4) 심화 — 예시 B](#4-심화--nodepool--aksnodeclass-커스터마이징)에서 다룹니다.)
+`Deleted` 이벤트가 보이면 `kubectl get nodes`로 노드가 실제로 줄었는지 확인합니다.
+```bash
+kubectl get nodes                    # 몇 초 간격으로 반복 실행 → aks-default-* 가 사라지는지 확인
+# 연속 관찰을 원하면: watch -n 2 kubectl get nodes
+```
+- 유휴 노드는 NAP가 **수 분 내** 회수해 `aks-default-*` 노드가 사라집니다(시스템 노드풀은 유지).
+- 이때 06 모듈의 KEDA Pod 축소(`virtual-customer` 축소)도 함께 진행했다면, Pod·노드가 동시에 줄어드는 2계층 scale-in을 확인할 수 있습니다.
 
-## 4) 심화 — NodePool / AKSNodeClass 커스터마이징
+> **참고 — "빈 노드 회수"와 "저활용 통합(bin-packing)"은 다릅니다.** 여기서 본 축소는 부하를 제거해 노드가 **비었기 때문**에 일어나는 **Empty 회수**라, 다른 노드의 Pod를 건드리지 않아 PDB가 막지 않습니다. 반면 여러 노드에 흩어진 워크로드를 더 적은 노드로 **모으는** 저활용 통합에서는 NAP가 기존 노드의 Pod를 **축출(Evict)** 해야 하는데, `istiod`(모듈 05)처럼 **PDB가 걸린 단일 레플리카**는 축출이 **영구 차단**됩니다(`replicas=1`, `minAvailable=1`이면 한 개도 못 내림). 그 경우 이벤트에 `DisruptionBlocked: Pdb prevents pod evictions (PodDisruptionBudget=[aks-istio-system/istiod])`가 반복되고 해당 노드는 통합되지 않습니다. *05.1(AGC)을 따랐다면 Istio가 없어 이 차단이 없을 수 있으며, `kube-system`의 `alb-controller` PDB가 있으면 그것이 차단 원인일 수 있습니다.* 커스텀 `NodePool`을 **taint로 격리**해 기존 워크로드 이주 없이 안전하게 만들고 빈 노드만 회수하는 실습은 아래 [5) 심화](#5-심화--nodepool--aksnodeclass-커스터마이징)에서 다룹니다.
+
+> **두 계층의 협력 정리:** KEDA가 부하에 맞춰 **Pod**를 늘리면 → 노드 용량이 부족해져 Pending이 생기고 → NAP가 **노드**를 추가합니다. 부하가 사라지면 KEDA가 Pod를(큐 트리거는 0까지), NAP가 빈 노드를 차례로 회수합니다.
+
+## 5) 심화 — NodePool / AKSNodeClass 커스터마이징
 
 NAP의 동작은 두 리소스로 제어합니다. 실제 운영에서는 기본 프로필을 그대로 쓰기보다, 워크로드 특성에 맞춰 `NodePool`을 추가/수정합니다.
 
 - **`NodePool`** — *어떤* 노드를 만들지: 허용 SKU/아키텍처/용량유형(`requirements`), 우선순위(`weight`), 총량 상한(`limits`), 통합·수명 정책(`disruption`), 적용 대상 제한(`taints`).
 - **`AKSNodeClass`** — *어떻게* 만들지: OS 디스크 크기/타입, 노드 이미지 등.
 
-### 예시 A — Spot + Arm64 비용 최적화 NodePool
+### 시나리오 — taint로 격리한 커스텀 NodePool에 전용 워크로드 배치
 
-배치/내결함성 워크로드를 저렴한 **Spot** 또는 **Arm64(Ampere)** 노드에 우선 배치합니다.
+> **왜 격리(taint)가 필요한가:** 커스텀 `NodePool`에 **taint를 두지 않으면**, 그 NodePool이 더 저렴하거나 `weight`가 높을 때 NAP가 **기존 앱 Pod(mongodb·rabbitmq·store-front 등)까지 그 노드로 이주(Consolidation)** 시킬 수 있습니다. 상태 저장 워크로드가 축출/이주되면 **순단·데이터 장애**가 발생합니다. 그래서 이 실습은 **taint로 NodePool을 격리**하고 **전용 테스트 워크로드만 `toleration`+`nodeSelector`로 옵트인**합니다. 이렇게 하면 **기존 워크로드는 절대 이동하지 않고**, 정리 단계에서도 영향이 없습니다.
 
-**A-1) NodePool 적용**
+**5-1) 커스텀 AKSNodeClass 생성 (노드를 *어떻게* 만들지: OS 이미지·디스크)**
+
+`AKSNodeClass`는 노드의 **OS 이미지 종류**와 **OS 디스크**를 정의합니다. 기본 `default`(Ubuntu)를 그대로 쓰지 않고, **Azure Linux 이미지 + 64GB OS 디스크**를 사용하는 전용 NodeClass를 만듭니다.
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: karpenter.azure.com/v1beta1
+kind: AKSNodeClass
+metadata:
+  name: batch-nodeclass
+spec:
+  imageFamily: AzureLinux          # 노드 OS 이미지(Ubuntu | AzureLinux). 기본 default는 Ubuntu
+  osDiskSizeGB: 64                 # 노드 OS 디스크 크기(GB). 기본 128 → 64로 축소
+EOF
+```
+
+```bash
+kubectl get aksnodeclass
+```
+
+```text
+NAME              AGE
+batch-nodeclass   5s
+default           60m              ← NAP가 만든 기본 NodeClass(Ubuntu, 그대로 둠)
+```
+
+> `AKSNodeClass`(*어떻게* 만들지)와 `NodePool`(*무엇을* 만들지)은 분리돼 있어, 같은 NodeClass를 여러 NodePool이 공유하거나 NodePool마다 다른 이미지/디스크를 줄 수 있습니다. 여기서는 `batch-pool`만 이 커스텀 NodeClass를 쓰므로 **기존 노드의 OS/디스크에는 영향이 없습니다.**
+
+**5-2) 커스텀 NodePool 생성 (requirements·taints·limits·disruption 한 번에)**
+
+허용 SKU를 화이트리스트로 고정하고, on-demand로 안정성을 확보하며, **taint로 격리**하고, 위에서 만든 **`batch-nodeclass`를 참조**하는 NodePool을 만듭니다.
+
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: karpenter.sh/v1
 kind: NodePool
 metadata:
-  name: spot-arm
+  name: batch-pool
 spec:
-  weight: 50                       # 기본(default)보다 먼저 평가
   template:
+    metadata:
+      labels:
+        workload: batch                 # 노드 식별/선택용 라벨(전용 워크로드가 nodeSelector로 사용)
     spec:
       nodeClassRef:
         group: karpenter.azure.com
         kind: AKSNodeClass
-        name: default
+        name: batch-nodeclass           # 5-1에서 만든 커스텀 NodeClass(AzureLinux/64GB) 참조
       requirements:
-        - key: karpenter.sh/capacity-type     # Spot 우선
+        - key: karpenter.sh/capacity-type
           operator: In
-          values: ["spot"]
-        - key: kubernetes.io/arch             # Arm64
+          values: ["on-demand"]         # Spot 축출로 인한 순단 방지 → on-demand 고정
+        - key: kubernetes.io/arch
           operator: In
-          values: ["arm64"]
-        - key: karpenter.azure.com/sku-family
+          values: ["amd64"]
+        - key: node.kubernetes.io/instance-type
           operator: In
-          values: ["D"]
+          values: ["Standard_D2s_v5", "Standard_D4s_v5"]   # 허용 SKU 화이트리스트
+      taints:
+        - key: workload
+          value: batch
+          effect: NoSchedule            # ★ 격리: 이 taint를 tolerate하지 않는 Pod는 절대 못 옴(기존 앱 보호)
+      expireAfter: 168h                 # (v1) 노드 7일마다 롤링 교체 — template.spec 아래에 위치
   disruption:
-    consolidationPolicy: WhenEmptyOrUnderutilized
-    consolidateAfter: 1m
+    consolidationPolicy: WhenEmpty      # ★ '빈 노드만' 회수 → 실행 중 Pod 축출(이주) 없음
+    consolidateAfter: 30s
   limits:
-    cpu: "100"                      # 이 NodePool 총 vCPU 상한
+    cpu: "20"                           # 이 NodePool 총 vCPU 상한(폭주 방지)
 EOF
 ```
-> **핵심:** 이 NodePool은 `weight: 50`으로 기본 `default`(weight 0)보다 **먼저 평가**됩니다. 그리고 **taint를 두지 않았기 때문에**, 특별한 toleration/nodeSelector가 없는 **일반 워크로드도** NAP가 노드를 새로 만들 때 이 NodePool(=Spot/Arm64)을 우선 선택합니다. 즉 앱 변경 없이 신규 노드를 저렴한 Spot으로 유도할 수 있습니다.
-> Spot 노드는 Azure가 회수(축출)할 수 있으므로 중단을 견디는 워크로드에 적합합니다. 또한 Arm64 노드를 쓰므로 컨테이너 이미지가 멀티아키(arm64)를 지원해야 합니다(미지원 이미지는 아래 fallback 참고).
 
-**A-2) NodePool 등록 확인**
+> **핵심 설계 포인트**
+> - `taints` — 이 NodePool 노드는 `workload=batch` taint를 가집니다. **toleration이 없는 기존 앱 Pod는 여기로 스케줄/이주될 수 없습니다.** (격리)
+> - `consolidationPolicy: WhenEmpty` — **완전히 빈 노드만** 회수합니다. `WhenEmptyOrUnderutilized`와 달리 **실행 중인 Pod를 다른 노드로 축출(Evict)하지 않으므로** 순단이 없습니다. (provisioning은 정책과 무관하게 Pending Pod가 생기면 일어납니다.)
+> - `requirements`의 `instance-type` 화이트리스트 — NAP가 만들 노드 크기를 통제합니다(요청량에 맞춰 가장 작은 SKU 선택).
+> - `limits.cpu` — 이 NodePool이 만들 수 있는 총 vCPU 상한.
+
+NodePool이 등록됐는지 확인합니다(아직 노드는 0개).
+
 ```bash
-kubectl get nodepool                       # spot-arm 이 보이는지
-kubectl describe nodepool spot-arm | grep -A12 'Requirements\|Disruption\|Limits'
+kubectl get nodepool batch-pool
 ```
+
 ```text
-NAME       NODECLASS   NODES   READY   AGE
-default    default     2       True    62m
-spot-arm   default     0       True    10s     ← 방금 추가(아직 노드 0개)
+NAME         NODECLASS   NODES   READY   AGE
+batch-pool   default     0       True    8s
 ```
 
-**A-3) 일반 워크로드가 weight로 Spot 노드에 자동 배치됨**
+**5-3) 전용 워크로드 배포 (opt-in: toleration + nodeSelector)**
 
-섹션 2와 **완전히 같은 일반 Pod**(toleration·nodeSelector 없음)를 띄웁니다. 기존 노드에 담기지 않는 **큰 요청(3 vCPU)** 이라 `Pending`이 되고 NAP가 새 노드를 만드는데, 이때 **`spot-arm` NodePool의 weight(50)가 default(0)보다 높아** NAP가 **Spot(Arm64) 노드를 선택**합니다. 앱에는 아무 Spot 관련 설정이 없는데도 비용 최적화 노드로 가는 것이 핵심입니다.
+`batch-pool`에만 올라가도록 **taint를 tolerate**하고 **`workload: batch` 노드를 `nodeSelector`로 지정**한 전용 Pod를 띄웁니다. 기존 노드엔 자리가 없고 다른 노드는 taint 때문에 못 가므로, NAP가 `batch-pool`에 새 노드를 만듭니다.
+
 ```bash
 kubectl apply -f - <<'EOF'
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: spot-arm-demo
+  name: batch-demo
   namespace: pets
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: spot-arm-demo }
+    matchLabels: { app: batch-demo }
   template:
     metadata:
-      labels: { app: spot-arm-demo }
-    spec:
-      containers:
-        - name: pause
-          image: registry.k8s.io/pause:3.9   # 멀티아키(arm64 지원)
-          resources:
-            requests:
-              cpu: "3"             # 2 vCPU 노드에 담기지 않는 요청 → 반드시 Pending → NAP
-              memory: 2Gi
-EOF
-```
-배포 직후 Pod가 `Pending` 상태인지 확인합니다.
-```bash
-kubectl get pods -n pets -l app=spot-arm-demo -o wide   # 처음엔 Pending
-```
-예상(담을 노드가 없어 `Pending` → 잠시 후 신규 Spot 노드에 배치):
-```text
-NAME                          READY   STATUS    NODE
-spot-arm-demo-xxxxxxxxx-aaaaa 0/1     Pending   <none>   ← 담을 노드 없음 → NAP 트리거
-```
-
-**A-4) Spot Arm64 노드 생성 관찰**
-```bash
-# Karpenter가 spot-arm NodePool로 노드를 만드는지 이벤트 스냅샷으로 확인(최근순)
-kubectl get events -A --field-selector source=karpenter --sort-by=.lastTimestamp
-kubectl get nodeclaim -L karpenter.sh/nodepool,karpenter.sh/capacity-type,kubernetes.io/arch
-```
-```text
-NAME             TYPE              CAPACITY   NODEPOOL   READY   AGE   NODEPOOL   CAPACITY-TYPE   ARCH
-spot-arm-abcde   Standard_D2pls_v5 spot       spot-arm   True    70s   spot-arm   spot            arm64
-```
-
-**A-5) 배치 결과 검증 — Pod가 Spot/Arm64 노드에 떴는지**
-```bash
-NODE=$(kubectl get pods -n pets -l app=spot-arm-demo -o jsonpath='{.items[0].spec.nodeName}')
-echo "scheduled on: $NODE"
-kubectl get node "$NODE" -L karpenter.sh/capacity-type,kubernetes.io/arch
-```
-```text
-scheduled on: aks-spot-arm-abcde
-NAME                  STATUS   ROLES   AGE   VERSION   CAPACITY-TYPE   ARCH
-aks-spot-arm-abcde    Ready    <none>  60s   v1.34.x   spot            arm64
-```
-> `CAPACITY-TYPE=spot`, `ARCH=arm64`면 weight 우선순위에 따라 의도대로 비용 최적화 노드에 배치된 것입니다. **(가용성 주의)** 일부 리전/구독은 Spot+Arm64 재고가 없을 수 있습니다. 노드가 안 만들어지고 `kubectl describe nodeclaim`에 용량 부족 오류가 보이면, `spot-arm` NodePool의 `kubernetes.io/arch` 요구사항을 `["amd64"]`로 바꾸거나 제거(= Spot만)한 뒤 다시 적용(A-1)하고 재시도하세요(테스트 Pod는 그대로 두면 됩니다).
-
-> ⚠️ **주의 — 잠시 후 클러스터 전체가 Spot 노드로 쏠릴 수 있습니다(정상 동작).** 이 예시의 `spot-arm` NodePool은 "일반 Pod가 weight만으로 Spot에 뜨는 것"을 보여주려고 **taint를 일부러 뺐습니다.** 그 결과 NAP의 통합(Consolidation)이 `kubectl get events ... karpenter`에서 아래처럼 동작합니다.
-> ```text
-> ConsolidationCandidate  node/aks-default-xxxxx  replace: [aks-default-xxxxx] -> [1 replacement] (savings: $0.14)
-> DisruptionTerminating   node/aks-default-xxxxx  Disrupting Node: Underutilized
-> Evicted/Nominated       pod/...                 → node/aks-spot-arm-xxxxx
-> ```
-> 즉 **(1) Spot이 on-demand보다 싸고 (2) taint가 없어 일반 앱 Pod도 받을 수 있고 (3) weight=50으로 우선순위가 높아서**, NAP가 기존 on-demand 노드를 "더 싼 노드로 교체" 대상으로 보고 **모든 워크로드(mongodb·rabbitmq 포함)를 Spot 노드로 이주**시킵니다. 오작동이 아니라 비용 최적화 통합의 정상 결과입니다.
->
-> **운영에서 전체 Spot 쏠림을 막으려면** Spot NodePool을 옵트인 방식으로 격리하세요.
-> - `spot-arm`에 **taint** 추가(예: `spot=true:NoSchedule`) → Spot을 감수하는 워크로드만 `tolerations`로 옵트인. 일반 앱은 on-demand에 남습니다.
-> - 또는 중요한 Pod에 `karpenter.sh/capacity-type: on-demand` nodeAffinity를 줘 Spot 배치를 금지.
-> - **상태 저장(stateful)** 워크로드(mongodb·rabbitmq)는 Spot 축출(30초 예고 후 회수) 위험이 있으므로 on-demand 권장. (이 예시는 학습용이라 격리를 생략한 것입니다.)
-
-**A-6) 정리**
-```bash
-kubectl delete deployment spot-arm-demo -n pets
-kubectl delete nodepool spot-arm        # 빈 노드는 NAP가 곧 회수
-```
-> 정리 후에도 일부 워크로드가 잠깐 Spot 노드에 남아 있을 수 있습니다. `spot-arm` NodePool을 지우면 NAP가 해당 Spot 노드를 회수하고, 남은 Pod를 다시 기본(on-demand) 노드로 재배치합니다(수 분 소요).
-
-### 예시 B — 통합(Consolidation)으로 비용 회수
-
-저활용 노드를 NAP가 더 적은 노드로 **빈-패킹(bin-packing)** 해 비용을 회수하는 과정을 실습합니다.
-
-**B-1) 적극적 통합 정책의 NodePool 적용**
-
-`disruption` 설정만 다른 별도 NodePool을 만들어 동작을 관찰합니다(기본 `default` NodePool은 AKS가 관리하므로 직접 수정하지 않습니다).
-```bash
-kubectl apply -f - <<'EOF'
-apiVersion: karpenter.sh/v1
-kind: NodePool
-metadata:
-  name: consolidation-demo
-spec:
-  weight: 20
-  template:
-    spec:
-      nodeClassRef:
-        group: karpenter.azure.com
-        kind: AKSNodeClass
-        name: default
-      requirements:
-        - key: karpenter.sh/capacity-type
-          operator: In
-          values: ["on-demand"]
-        - key: node.kubernetes.io/instance-type
-          operator: In
-          values: ["Standard_D2s_v5"]   # 노드 크기를 2 vCPU로 고정 → 각 노드에 1.5 vCPU Pod 1개만 → 여러 노드로 흩어짐
-      taints:
-        - key: consolidation-demo
-          value: "true"
-          effect: NoSchedule
-      expireAfter: 168h              # (v1) 노드 7일마다 롤링 교체 — template.spec 아래에 위치
-  disruption:
-    consolidationPolicy: WhenEmptyOrUnderutilized  # 비거나 저활용 노드 정리
-    consolidateAfter: 30s          # 유휴 30초 후 통합 시도
-  limits:
-    cpu: "100"
-EOF
-```
-적용 후 NodePool이 정상 등록됐는지 확인합니다.
-```bash
-kubectl get nodepool consolidation-demo
-kubectl describe nodepool consolidation-demo | grep -A6 Disruption
-```
-```text
-NAME                 NODECLASS   NODES   READY   AGE
-consolidation-demo   default     0       True    8s
-
-Disruption:
-  Consolidation Policy:  WhenEmptyOrUnderutilized
-  Consolidate After:     30s
-  Budgets:
-    Nodes:  10%
-```
-
-**B-2) 여러 노드로 흩어지는 워크로드 배포(통합 대상 만들기)**
-
-각 Pod가 노드 절반 이상의 CPU를 요구하도록 해 **여러 노드로 흩어지게** 합니다. Pod를 `consolidation-demo` NodePool에 고정(`nodeSelector`)해 다른 NodePool로 통합되지 않도록 합니다.
-```bash
-kubectl apply -f - <<'EOF'
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: consolidation-demo
-  namespace: pets
-spec:
-  replicas: 2
-  selector:
-    matchLabels: { app: consolidation-demo }
-  template:
-    metadata:
-      labels: { app: consolidation-demo }
+      labels: { app: batch-demo }
     spec:
       nodeSelector:
-        karpenter.sh/nodepool: consolidation-demo   # 이 NodePool 노드(D2s_v5)에만 배치 → 다른 NodePool로 통합 방지
+        workload: batch                 # batch-pool 노드(라벨)만 선택
       tolerations:
-        - key: consolidation-demo
+        - key: workload
           operator: Equal
-          value: "true"
-          effect: NoSchedule
+          value: batch
+          effect: NoSchedule            # taint 허용(이 워크로드만 옵트인)
       containers:
         - name: pause
           image: registry.k8s.io/pause:3.9
           resources:
             requests:
-              cpu: "1500m"        # D2s_v5(2 vCPU) 노드당 1개만 들어감 → 노드 여러 대 생성
+              cpu: "1"                  # D2s_v5(2 vCPU)에 담기는 요청 → 가장 작은 SKU 선택 유도
               memory: 256Mi
 EOF
 ```
-NAP가 워크로드를 담기 위해 노드를 여러 대 만드는지 확인합니다.
-```bash
-kubectl get nodes -L karpenter.sh/nodepool   # consolidation-demo 노드가 여러 대 생기는지
-```
-```text
-NAME                           STATUS   ROLES   AGE   VERSION   NODEPOOL
-aks-system-12345678-vmss000000 Ready    <none>  70m   v1.34.x
-aks-system-12345678-vmss000001 Ready    <none>  70m   v1.34.x
-aks-default-abcde              Ready    <none>  58m   v1.34.x   default
-aks-consolidation-demo-aaaaa   Ready    <none>  90s   v1.34.x   consolidation-demo
-aks-consolidation-demo-bbbbb   Ready    <none>  88s   v1.34.x   consolidation-demo
-```
-> 각 Pod가 1.5 vCPU를 요구하는데 D2s_v5(2 vCPU) 노드엔 하나만 들어가므로, replica 2개가 **노드 2대로 흩어집니다**(저활용 상태 = 통합 대상).
->
-> ⚠️ **노드가 여러 대가 아니라 큰 노드 1대만 생기면?** NodePool의 `requirements`에 **노드 크기 제약이 없을 때**(예: `sku-family: D`만 지정) 발생합니다. 이 경우 Karpenter가 비용효율을 위해 **큰 D 노드 1대**(예: D8s_v5)에 Pod 2개를 모두 bin-packing 하기 때문입니다. 위처럼 `node.kubernetes.io/instance-type: ["Standard_D2s_v5"]`로 **노드 크기를 2 vCPU로 고정**해야 "노드당 Pod 1개 → 여러 노드"가 성립합니다. 또한 Pod에 `nodeSelector: karpenter.sh/nodepool: consolidation-demo`를 줘야 통합 시 다른(default) NodePool의 큰 노드로 합쳐지지 않습니다. 만약 `ConsolidationCandidate ... (part of N-node consolidation)` 이벤트와 함께 모두 한 노드로 합쳐졌다면 이 두 제약이 빠진 것입니다.
 
-**B-3) 부하 축소 → 통합 관찰**
+NAP가 `batch-pool`에 노드를 만드는 과정을 관찰합니다. 여기서도 **① 이벤트로 진행 과정을 보고 → ② `kubectl get nodes`로 신규 노드를 확인**합니다.
 
-replica를 줄이면 노드가 저활용 상태가 되고, NAP가 남은 Pod를 더 적은 노드로 옮긴 뒤 빈 노드를 회수합니다.
+**① 이벤트로 노드 생성 과정 확인**
 ```bash
-kubectl scale deployment consolidation-demo -n pets --replicas=1
-# 통합/노드 삭제 이벤트 스냅샷(최근순) — 몇 초 간격으로 반복 실행
+kubectl get pods -n pets -l app=batch-demo -o wide   # 처음엔 Pending → 곧 batch-pool 노드에 스케줄
 kubectl get events -A --field-selector source=karpenter --sort-by=.lastTimestamp
-kubectl get nodes -L karpenter.sh/nodepool                   # consolidation-demo 노드 수가 줄어드는지
 ```
+예상 이벤트:
 ```text
-default   Normal   Disrupted   nodeclaim/consolidation-demo-xxxxx   ... disrupting via consolidation: underutilized
-default   Normal   Deleted     node/aks-consolidation-demo-xxxxx    ... deleted node
+default    106s   Normal   ImagesReady              aksnodeclass/batch-nodeclass   Status condition transitioned, Type: ImagesReady, Status: Unknown -> True, Reason: ImagesReady
+default    106s   Normal   LocalDNSReady            aksnodeclass/batch-nodeclass   Status condition transitioned, Type: LocalDNSReady, Status: Unknown -> True, Reason: LocalDNSReady
+default    106s   Normal   Ready                    aksnodeclass/batch-nodeclass   Status condition transitioned, Type: Ready, Status: Unknown -> True, Reason: Ready
+default    106s   Normal   ValidationSucceeded      aksnodeclass/batch-nodeclass   Status condition transitioned, Type: ValidationSucceeded, Status: Unknown -> True, Reason: ValidationSucceeded
+default    106s   Normal   SubnetsReady             aksnodeclass/batch-nodeclass   Status condition transitioned, Type: SubnetsReady, Status: Unknown -> True, Reason: SubnetsReady
+default    106s   Normal   KubernetesVersionReady   aksnodeclass/batch-nodeclass   Status condition transitioned, Type: KubernetesVersionReady, Status: Unknown -> True, Reason: KubernetesVersionReady
+default    90s    Normal   NodeClassReady           nodepool/batch-pool            Status condition transitioned, Type: NodeClassReady, Status: Unknown -> True, Reason: NodeClassReady
+default    90s    Normal   ValidationSucceeded      nodepool/batch-pool            Status condition transitioned, Type: ValidationSucceeded, Status: Unknown -> True, Reason: ValidationSucceeded
+default    90s    Normal   Ready                    nodepool/batch-pool            Status condition transitioned, Type: Ready, Status: Unknown -> True, Reason: Ready
+pets       81s    Normal   Nominated                pod/batch-demo-f4d64fbbf-9kz45  Pod should schedule on: nodeclaim/batch-pool-tqv2l
+default    77s    Normal   Launched                 nodeclaim/batch-pool-tqv2l     Status condition transitioned, Type: Launched, Status: Unknown -> True, Reason: Launched
+default    76s    Normal   DisruptionBlocked        nodeclaim/batch-pool-tqv2l     Nodeclaim does not have an associated node
 ```
+> 먼저 커스텀 `aksnodeclass/batch-nodeclass`가 **이미지·서브넷·K8s 버전 검증을 통과(Ready)** 하고, 이어 `nodepool/batch-pool`이 **NodeClassReady/Ready**가 됩니다. 그다음 `batch-demo` Pod가 `nodeclaim/batch-pool-tqv2l`에 **Nominated**되고 VM이 **Launched**되어, NAP가 **격리된 `batch-pool`에만** 새 노드를 만듭니다(이벤트 object가 모두 `batch-*`). 부팅 중 `DisruptionBlocked`(*Nodeclaim does not have an associated node*)는 정상 메시지입니다.
 
-**B-4) 정리**
+**② 신규 노드·OS 이미지 확인**
+
+`Ready` 이벤트가 보이면 노드의 SKU와 OS 이미지를 확인합니다.
 ```bash
-kubectl delete deployment consolidation-demo -n pets
-kubectl delete nodepool consolidation-demo
+kubectl get nodes -L node.kubernetes.io/instance-type,karpenter.sh/nodepool -o wide
 ```
 
-> **동작 원리 요약:** Pending Pod가 생기면 NAP는 **모든** `NodePool`을 `weight` 순으로 평가해, 제약을 만족하면서 가장 비용효율적인 SKU를 골라 노드를 만듭니다. 부하가 줄면 `disruption` 정책에 따라 노드를 통합/회수합니다. 자세한 예시는 [aks-labs: Scaling with KEDA and Karpenter](https://azure-samples.github.io/aks-labs/docs/operations/scaling-with-keda-and-karpenter/)와 [AKS Node Auto Provisioning 문서](https://learn.microsoft.com/azure/aks/node-autoprovision)를 참고하세요.
-
-## 5) 노드 축소(scale-in / consolidation) 관찰
-
-부하를 제거하면 NAP가 빈 노드를 감지해 회수합니다.
-```bash
-kubectl delete deployment nap-stress -n pets
-# Karpenter가 빈 노드를 회수하는 과정 스냅샷(최근순) — 몇 초 간격으로 반복 실행
-kubectl get events -A --field-selector source=karpenter --sort-by=.lastTimestamp   # Disrupted/Deleted 이벤트
-kubectl get nodes                                            # 반복 실행 → aks-default-* 가 사라지는지 확인
-# 연속 관찰을 원하면: watch -n 2 kubectl get nodes
-```
-출력 예시:
 ```text
-default   Normal   Disrupted   nodeclaim/default-xxxxx   ... disrupting via consolidation
-default   Normal   Deleted     node/aks-default-xxxxx    ... deleted node
+NAME                   STATUS  ...  INSTANCE-TYPE      NODEPOOL      OS-IMAGE
+aks-default-abcde      Ready   ...  Standard_D2s_v5    default       Ubuntu 22.04.x LTS    ← 기존 앱 노드(그대로 유지)
+aks-batch-pool-xxxxx   Ready   ...  Standard_D2s_v5    batch-pool    CBL-Mariner/Linux     ← batch-nodeclass 적용(Azure Linux)
 ```
-- 유휴 노드는 NAP가 **수 분 내** 회수해 `aks-default-*` 노드가 사라집니다(시스템 노드풀은 유지).
-- 이때 06 모듈의 KEDA Pod 축소(`virtual-customer` 축소)도 함께 진행했다면, Pod·노드가 동시에 줄어드는 2계층 scale-in을 확인할 수 있습니다.
 
-> **두 계층의 협력 정리:** KEDA가 부하에 맞춰 **Pod**를 늘리면 → 노드 용량이 부족해져 Pending이 생기고 → NAP가 **노드**를 추가합니다. 부하가 사라지면 KEDA가 Pod를(큐 트리거는 0까지), NAP가 빈 노드를 차례로 회수합니다.
+> 새 노드의 `OS-IMAGE`가 **`CBL-Mariner/Linux`(= Azure Linux)** 로 뜨면 커스텀 `AKSNodeClass`(`imageFamily: AzureLinux`)가 적용된 것입니다. 요청이 1 vCPU라 SKU는 화이트리스트 중 **가장 작은 `Standard_D2s_v5`** 가 선택됩니다. 요청을 `cpu: "3"` 으로 올린 뒤 다시 배포하면 NAP가 `Standard_D4s_v5` 를 고르는 **right-sizing**도 같은 방식으로 확인할 수 있습니다. 어느 경우든 **기존 `default` 노드와 앱 Pod는 전혀 영향을 받지 않습니다.**
+
+**5-4) 정리 — 빈 노드만 회수(기존 워크로드 무영향)**
+
+전용 워크로드를 지우면 `batch-pool` 노드가 **완전히 비고**, `WhenEmpty` 정책에 따라 NAP가 그 노드만 회수합니다. 기존 앱 Pod는 이 노드에 올라간 적이 없으므로 **아무 것도 이동하지 않습니다.**
+
+```bash
+kubectl delete deployment batch-demo -n pets   # batch-pool 노드가 Empty가 됨 → 잠시 후 회수
+# (선택) NodePool과 커스텀 NodeClass도 제거 — 격리 노드만 사라지고 기존 노드/Pod에는 영향 없음
+kubectl delete nodepool batch-pool
+kubectl delete aksnodeclass batch-nodeclass    # NodePool이 참조 중이면 먼저 NodePool을 지운 뒤 삭제
+```
+
+예상 이벤트:
+```text
+default    96s    Normal   Drained                         nodeclaim/batch-pool-kcsmr     Status condition transitioned, Type: Drained, Status: Unknown -> True, Reason: Drained
+default    60s    Normal   WaitingOnNodeClaimTermination   aksnodeclass/batch-nodeclass   Waiting on NodeClaim termination for batch-pool-tqv2l
+default    51s    Normal   DisruptionBlocked               node/aks-batch-pool-tqv2l      Node is deleting or marked for deletion
+default    51s    Normal   DisruptionBlocked               nodeclaim/batch-pool-tqv2l     Node is deleting or marked for deletion
+default    45s    Normal   Drained                         nodeclaim/batch-pool-tqv2l     Status condition transitioned, Type: Drained, Status: Unknown -> True, Reason: Drained
+default    40s    Normal   Finalized                       aksnodeclass                   Finalized karpenter.azure.com/termination
+default    40s    Normal   Finalized                       nodeclaim                      Finalized karpenter.sh/termination
+default    40s    Normal   Finalized                       node                           Finalized karpenter.sh/termination
+```
+> `batch-demo`를 지우면 `batch-pool` 노드가 비어 **Drained → Finalized** 순으로 회수됩니다. NodePool/NodeClass까지 삭제하면 `WaitingOnNodeClaimTermination`(NodeClaim 종료 대기) 후 `aksnodeclass/nodeclaim/node`가 모두 **Finalized**됩니다. 종료 중 `DisruptionBlocked`(*Node is deleting or marked for deletion*)는 정상 메시지이며, 이벤트 object가 전부 `batch-*`라 **기존 노드·Pod는 전혀 건드리지 않습니다.**
+
+> **동작 원리 요약:** Pending Pod가 생기면 NAP는 **모든** `NodePool`을 `weight` 순으로 평가해 `requirements`/`taints`를 만족하는 가장 비용효율적인 노드를 만듭니다. **taint로 격리하고 `consolidationPolicy: WhenEmpty`를 쓰면**, 커스텀 NodePool은 전용 워크로드만 받고 **빈 노드만 회수**하므로 기존 앱 Pod의 이주·순단 없이 안전하게 노드를 늘리고 줄일 수 있습니다. 더 다양한 옵션은 [AKS Node Auto Provisioning 문서](https://learn.microsoft.com/azure/aks/node-autoprovision)를 참고하세요.
 
 ## 검증 및 완료 체크리스트
 
@@ -537,8 +454,8 @@ default   Normal   Deleted     node/aks-default-xxxxx    ... deleted node
 - [ ] `nodeProvisioningProfile.mode`가 `Auto`이고 기본 `nodepool`/`aksnodeclass`가 존재함을 확인함
 - [ ] `nap-stress`(단일 Pod, `cpu: "3"`)로 노드 용량을 초과하는 요청을 만들어 Pending(`FailedScheduling`)을 확인함
 - [ ] Karpenter 이벤트(`Launched`→`Ready`)와 함께 신규 노드(`aks-default-*`)가 추가되고 Pending Pod가 스케줄링됨
-- [ ] `NodePool`/`AKSNodeClass`의 역할(requirements·disruption·limits)을 이해함
 - [ ] 부하 제거 후 NAP가 빈 노드를 통합/회수(scale-in)함을 확인함
+- [ ] `NodePool`(무엇을: requirements·disruption·limits·taints)과 `AKSNodeClass`(어떻게: imageFamily·osDiskSizeGB)의 역할을 이해하고, taint 격리로 기존 워크로드 이동 없이 커스텀 노드를 만들어 봄
 - [ ] KEDA(요청량 무관·사용률/이벤트)와 NAP(요청량 기준) 트리거 차이를 이해함
 
 ---
@@ -551,7 +468,7 @@ default   Normal   Deleted     node/aks-default-xxxxx    ... deleted node
 | 노드 추가가 느림(수 분) | VM 프로비저닝·이미지 풀 시간 | `kubectl get events -A --field-selector source=karpenter --sort-by=.lastTimestamp` | 정상. `Launched`→`Ready` 이벤트까지 대기 |
 | 신규 노드에 Pod가 안 올라감 | taint/toleration 또는 affinity 불일치 | `kubectl describe pod <pod> -n pets`(Events), `kubectl get node <node> -o jsonpath='{.spec.taints}'` | 워크로드에 맞는 toleration/affinity 추가 |
 | 유휴 노드가 회수 안 됨(scale-in 안 됨) | 부하/Pending 잔존 또는 통합 정책 보수적 | `kubectl get pods -A -o wide \| grep aks-default`, `kubectl describe nodepool default` | `nap-stress` 삭제 확인, `consolidationPolicy`/`consolidateAfter` 점검 후 수 분 대기 |
-| `NodePool` 적용 시 `unknown field "spec.disruption.expireAfter"` | Karpenter `v1`에서 `expireAfter`는 `disruption`이 아니라 `spec.template.spec` 아래로 이동 | `kubectl explain nodepool.spec.template.spec.expireAfter`, `kubectl explain nodepool.spec.disruption` | `expireAfter`를 `spec.template.spec` 아래로 옮김(예시 B 참고). `disruption`에는 `consolidationPolicy`/`consolidateAfter`/`budgets`만 둠 |
+| `NodePool` 적용 시 `unknown field "spec.disruption.expireAfter"` | Karpenter `v1`에서 `expireAfter`는 `disruption`이 아니라 `spec.template.spec` 아래로 이동 | `kubectl explain nodepool.spec.template.spec.expireAfter`, `kubectl explain nodepool.spec.disruption` | `expireAfter`를 `spec.template.spec` 아래로 옮김(5) 심화의 NodePool 예시 참고). `disruption`에는 `consolidationPolicy`/`consolidateAfter`/`budgets`만 둠 |
 | vCPU 쿼터 초과로 생성 실패 | 구독 리전 vCPU 한도 부족 | Karpenter 로그의 `QuotaExceeded`, `az vm list-usage -l koreacentral -o table` | 쿼터 증설 요청 또는 더 작은 SKU 허용하도록 `requirements` 조정 |
 
 다음: [08. 모니터링](08-monitoring.md)
