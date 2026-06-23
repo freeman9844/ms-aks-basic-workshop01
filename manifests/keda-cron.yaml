@@ -1,0 +1,27 @@
+# KEDA cron(시간 기반) 스케일러 데모 — store-front를 정해진 시간대에 선제(proactive) 확장
+# 표준 HPA는 부하가 와야 반응하지만, cron 트리거는 알려진 패턴(점심 러시 등)에 맞춰
+# 부하가 오기 전에 미리 확장하고, 시간대가 지나면 다시 minReplicaCount로 복귀합니다.
+#
+# 주의:
+#   - 한 Deployment는 하나의 ScaledObject/HPA만 가질 수 있습니다(store-front 전용).
+#   - cron 표현식은 분 단위 5필드이며 timezone(IANA) 필수입니다(미지정 시 UTC).
+#   - 실습에서는 start/end를 "현재 시각 +2분 ~ +5분"으로 직접 수정해 즉시 관찰하세요.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: store-front-cron
+  namespace: pets
+spec:
+  scaleTargetRef:
+    name: store-front
+  minReplicaCount: 1          # 평상시 1개 유지(프런트엔드는 항상 떠 있음)
+  maxReplicaCount: 5
+  cooldownPeriod: 30
+  pollingInterval: 15
+  triggers:
+    - type: cron
+      metadata:
+        timezone: Asia/Seoul
+        start: "5 12 * * *"    # 매일 12:05 확장 시작(점심 러시 전) — 실습 시 +2분으로 수정
+        end: "0 14 * * *"      # 14:00 종료 → 다시 minReplicaCount(1)로 복귀 — 실습 시 +5분으로 수정
+        desiredReplicas: "5"

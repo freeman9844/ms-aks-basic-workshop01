@@ -1,0 +1,55 @@
+# KEDA 큐(이벤트) 기반 스케일링 — RabbitMQ 'orders' 큐 길이로 makeline-service를 확장.
+# scale-to-zero(minReplicaCount: 0)가 KEDA의 대표 기능입니다(트래픽 없으면 0개로 축소).
+
+# 1) RabbitMQ 접속 정보(AMQP host)를 담은 Secret.
+#    host = amqp://username:password@rabbitmq.pets.svc.cluster.local:5672/
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keda-rabbitmq-secret
+  namespace: pets
+type: Opaque
+data:
+  host: YW1xcDovL3VzZXJuYW1lOnBhc3N3b3JkQHJhYmJpdG1xLnBldHMuc3ZjLmNsdXN0ZXIubG9jYWw6NTY3Mi8=
+---
+# 2) ScaledObject가 host를 참조하도록 연결하는 TriggerAuthentication.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: keda-rabbitmq-auth
+  namespace: pets
+spec:
+  secretTargetRef:
+    - parameter: host
+      name: keda-rabbitmq-secret
+      key: host
+---
+# 3) orders 큐 길이에 따라 makeline-service를 0~15개로 확장.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: makeline-rabbitmq
+  namespace: pets
+spec:
+  scaleTargetRef:
+    name: makeline-service     # orders 큐를 소비하는 워커
+  minReplicaCount: 0           # scale-to-zero
+  maxReplicaCount: 15
+  cooldownPeriod: 30           # 큐가 빈 뒤 0으로 축소까지 대기(초)
+  pollingInterval: 5           # 큐 길이 조회 주기(초)
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          # 기본값 300초(5분) → 30초로 단축. HPA는 메트릭이 떨어져도 이 윈도우 동안
+          # 최근 최대 복제본을 유지(플래핑 방지)하므로, 데모에서 축소를 빨리 보려면 줄입니다.
+          stabilizationWindowSeconds: 30
+  triggers:
+    - type: rabbitmq
+      metadata:
+        protocol: amqp
+        queueName: orders
+        mode: QueueLength      # 큐 길이 기준
+        value: "5"             # 메시지 5개당 Pod 1개
+      authenticationRef:
+        name: keda-rabbitmq-auth

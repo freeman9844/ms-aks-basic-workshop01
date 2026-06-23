@@ -1,0 +1,30 @@
+# Application Gateway for Containers (AGC) — Gateway API 리소스
+# ALB 관리형(Managed by ALB Controller) 전략: Gateway가 alb-test ApplicationLoadBalancer를 참조하면
+# ALB 컨트롤러가 Frontend 리소스를 자동 생성합니다. (GatewayClass: azure-alb-external)
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: store-gateway
+  namespace: pets
+  annotations:
+    # 모듈 05.1의 5)에서 만든 ApplicationLoadBalancer(CR)를 가리킵니다.
+    alb.networking.azure.io/alb-namespace: alb-test-infra
+    alb.networking.azure.io/alb-name: alb-test
+spec:
+  gatewayClassName: azure-alb-external   # ALB 컨트롤러가 담당하는 GatewayClass
+  listeners:
+    - name: http
+      port: 80                           # AGC 리스너는 80/443만 허용
+      protocol: HTTP
+      allowedRoutes: { namespaces: { from: Same } }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: store-front
+  namespace: pets
+spec:
+  parentRefs: [{ name: store-gateway }]
+  rules:
+    - matches: [{ path: { type: PathPrefix, value: / } }]
+      backendRefs: [{ name: store-front, port: 80 }]   # store-front Service:80로 전달

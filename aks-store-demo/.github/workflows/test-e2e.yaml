@@ -1,0 +1,20 @@
+name: test-e2e
+
+on:
+  schedule:
+    - cron: "0 0 * * 0" # Every Sunday at midnight UTC
+
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test-e2e:
+    uses: ./.github/workflows/test-e2e-reusable.yaml
+    secrets: inherit
+    with:
+      deploy-method: helm
+      helm-chart-owner: ${{ github.repository_owner }}
+      source-registry: "ghcr.io/${{ github.repository_owner }}"

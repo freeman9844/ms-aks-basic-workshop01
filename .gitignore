@@ -1,0 +1,24 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+override.tf
+override.tf.json
+
+# Azure / kube
+.kube/
+*.azureauth
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Superpowers 작업 산출물(설계/계획) - GitHub 동기화 제외
+docs/superpowers/
+
+# Copilot CLI 세션 대화 기록(export) - 용량이 크므로 제외
+session*.md

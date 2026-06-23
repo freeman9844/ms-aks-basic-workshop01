@@ -1,0 +1,15 @@
+prefix              = "akshol"
+location            = "koreacentral"
+system_node_vm_size = "Standard_D2s_v5"
+system_node_count   = 2
+
+# WAF/CAF: 환경 및 태깅
+environment = "dev"
+workload    = "aksworkshop"
+owner       = "platform-team"
+cost_center = "workshop"
+extra_tags  = {}
+
+# BYO 네트워크 (AKS가 사용할 VNet/Subnet)
+vnet_address_space          = ["10.224.0.0/16"]
+aks_subnet_address_prefixes = ["10.224.0.0/24"]
