@@ -213,7 +213,7 @@ CurrentValue    Limit    LocalName
 ## 5) 저장소 클론 및 Terraform 초기화
 
 ```bash
-git clone https://github.com/jungwoonlee_microsoft/ms-aks-basic-workshop01.git
+git clone https://github.com/freeman9844/ms-aks-basic-workshop01.git
 cd ms-aks-basic-workshop01/terraform
 cp terraform.tfvars.example terraform.tfvars
 terraform init
