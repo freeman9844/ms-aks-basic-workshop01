@@ -56,8 +56,8 @@ NAME                                          READY   STATUS    RESTARTS   AGE
 istiod-asm-xxxxx-7d9f8c6b5-abcde              1/1     Running   0          2m
 
 $ kubectl get gatewayclass approuting-istio
-NAME               CONTROLLER                              ACCEPTED   AGE
-approuting-istio   istio.io/gateway-controller             True       2m
+NAME               CONTROLLER                               ACCEPTED   AGE
+approuting-istio   istio.aks.azure.com/gateway-controller   True       2m
 ```
 
 ## 3) Gateway / HTTPRoute 적용
