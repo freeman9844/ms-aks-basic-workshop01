@@ -1,5 +1,7 @@
 # 01. 사전 준비
 
+> 🟢 **실행** = 직접 입력·수행 · 👁️ **예시** = 눈으로만(개념/발췌) · 📋 **예상 출력** = 비교용(입력 불필요)
+
 본 모듈에서는 워크숍을 시작하기 전에 **권한·도구·구독 설정·리소스 공급자 등록·쿼터**를 점검하고, 저장소를 클론해 Terraform을 초기화합니다. 여기서 꼼꼼히 준비하면 이후 `terraform apply` 단계에서 권한/쿼터/공급자 미등록으로 인한 실패를 예방할 수 있습니다.
 
 - 예상 소요: 약 10분
@@ -9,7 +11,7 @@
 
 ![Azure Cloud Shell(Bash) 예시 화면](images/cloudshell-example.png)
 
-> ⚠️ **Cloud Shell은 반드시 "스토리지 계정 마운트(영구)" 옵션으로 시작하세요.** 처음 Cloud Shell을 열면 **시작하기(Getting started)** 창에서 두 옵션이 나란히 표시되는데, 기본으로 영구가 선택되지는 않습니다. **No storage account required(임시·ephemeral)** 를 고르면 세션이 끝나거나 **20분간 입력이 없어 자동 로그아웃**되면 클론한 저장소·`terraform.tfvars`·**로컬 Terraform state까지 모두 사라집니다.** state가 사라지면 이미 만든 Azure 자원과 어긋나 [09. 정리](09-cleanup.md)의 `terraform destroy`가 꼬일 수 있으므로, 이 워크숍에서는 임시 세션을 권장하지 않습니다.
+> ⚠️ **Cloud Shell은 반드시 "스토리지 계정 마운트(영구)" 옵션으로 시작하세요.** 처음 Cloud Shell을 열면 **시작하기(Getting started)** 창에서 두 옵션이 나란히 표시되는데, 기본으로 영구가 선택되지는 않습니다. **No storage account required(임시·ephemeral)** 를 고르면 세션이 끝나거나 **20분간 입력이 없어 자동 로그아웃**되면 클론한 저장소·`terraform.tfvars`·**로컬 Terraform state까지 모두 사라집니다.** state가 사라지면 이미 만든 Azure 자원과 어긋나 [10. 정리](10-cleanup.md)의 `terraform destroy`가 꼬일 수 있으므로, 이 워크숍에서는 임시 세션을 권장하지 않습니다.
 >
 > **영구 스토리지로 시작하는 클릭 순서**
 >
@@ -44,7 +46,7 @@
 | 도구 | Azure CLI >= 2.86, Terraform >= 1.5, kubectl | Cloud Shell은 모두 사전 설치(자동 최신) |
 | 네트워크 | 인터넷 egress | Terraform Registry / 컨테이너 이미지 pull |
 | 지식 | 기본 Linux 셸, Kubernetes 기본 개념(Pod/Deployment/Service) | 실습 진행에 도움 |
-| 비용 | AKS·AMW·Grafana는 과금 리소스 | 실습 후 **반드시 [09. 정리](09-cleanup.md)** 로 삭제 |
+| 비용 | AKS·AMW·Grafana는 과금 리소스 | 실습 후 **반드시 [10. 정리](10-cleanup.md)** 로 삭제 |
 
 > 💡 **왜 Owner가 필요한가요?** 일반적인 리소스 생성은 Contributor로 충분하지만, 본 워크숍은 AKS-ACR(AcrPull), AKS-Subnet(Network Contributor), Grafana-AMW(Monitoring Data Reader), 사용자-Grafana(Grafana Admin) 등 **RBAC 역할 할당**을 Terraform이 직접 만듭니다. 역할 할당 쓰기 권한은 **Owner** 또는 **User Access Administrator** 에게만 있습니다.
 
@@ -54,6 +56,7 @@
 
 [Azure Portal](https://portal.azure.com)에서 우측 상단 Cloud Shell(`>_`)을 열고 **Bash**를 선택합니다. (로컬 환경이라면 먼저 `az login` 으로 인증하세요.)
 
+🟢 **실행**
 ```bash
 # 현재 로그인/구독 확인
 az account show -o table
@@ -70,6 +73,7 @@ AzureCloud         My Subscription       True         Enabled  72f988bf-xxxx-xxx
 ```
 
 내 권한이 Owner인지 확인합니다.
+🟢 **실행**
 ```bash
 # 현재 로그인 사용자의 UPN(로그인 이메일)과 구독 ID — 별도 Graph 호출 없이 현재 세션에서 바로 읽습니다.
 MY_UPN=$(az account show --query user.name -o tsv)   # 예: user@contoso.com
@@ -120,6 +124,7 @@ Owner
 | Terraform | 1.5 이상 | `terraform version` |
 | kubectl | 클러스터와 +-1 마이너 | `kubectl version --client` |
 
+🟢 **실행**
 ```bash
 az version                 # Cloud Shell은 항상 최신, 로컬이면 az upgrade
 terraform version          # >= 1.5 필요 (providers.tf의 required_version)
@@ -137,6 +142,7 @@ Client Version: v1.34.x
 
 Terraform이 생성하는 리소스의 **네임스페이스가 구독에 등록**되어 있어야 합니다. 미등록 상태면 `apply` 중 `MissingSubscriptionRegistration` 오류가 납니다. 아래 명령으로 한 번에 등록합니다(이미 등록돼 있으면 즉시 통과).
 
+🟢 **실행**
 ```bash
 for ns in \
   Microsoft.ContainerService \
@@ -161,6 +167,7 @@ done
 | `Microsoft.Network` | VNet/Subnet(BYO 네트워크) |
 
 등록 상태를 확인합니다(모두 `Registered` 여야 합니다).
+🟢 **실행**
 ```bash
 for ns in Microsoft.ContainerService Microsoft.ContainerRegistry Microsoft.OperationalInsights \
           Microsoft.Monitor Microsoft.Dashboard Microsoft.Insights Microsoft.Network; do
@@ -190,6 +197,7 @@ Microsoft.Network: Registered
 
 배포 리전(`location`, 기본값 `koreacentral`)에서 **시스템 노드 VM 패밀리의 vCPU 쿼터**가 충분한지 확인합니다. 기본값은 **데모 최소사양** `Standard_D2s_v5` x 2대 = **4 vCPU**(Dsv5 패밀리)이며, NAP가 추가 노드를 띄우면 더 필요할 수 있습니다.
 
+🟢 **실행**
 ```bash
 LOCATION=koreacentral
 # Dsv5 계열 vCPU 사용량/한도 확인
@@ -212,8 +220,9 @@ CurrentValue    Limit    LocalName
 
 ## 5) 저장소 클론 및 Terraform 초기화
 
+🟢 **실행**
 ```bash
-git clone https://github.com/freeman9844/ms-aks-basic-workshop01.git
+git clone https://github.com/jungwoonlee_microsoft/ms-aks-basic-workshop01.git
 cd ms-aks-basic-workshop01/terraform
 cp terraform.tfvars.example terraform.tfvars
 terraform init
@@ -277,7 +286,7 @@ aks_subnet_address_prefixes = ["10.224.0.0/24"]
 | `RoleAssignmentExists`/`AuthorizationFailed`(역할 할당) | 역할 할당 권한 없음 | `az role assignment list --assignee <id>` | Owner/User Access Administrator 권한 확보 후 재시도 |
 | `terraform init` 실패(provider 다운로드) | 네트워크/프록시 또는 레지스트리 접근 차단 | `terraform init` 출력의 URL 확인 | 네트워크 확인 후 재실행, 필요 시 `terraform init -upgrade` |
 | `git clone` 인증 실패 | 비공개 저장소 권한 없음 | `gh auth status` | `gh auth login` 후 재클론 |
-| 클론한 저장소·`terraform.tfvars`·state가 재접속 후 사라짐 | Cloud Shell을 **임시(ephemeral) 세션**으로 시작(20분 무활동 시 자동 로그아웃·호스트 재활용) | 세션 시작 시 "ephemeral storage" 안내가 보였는지 확인 | **설정 → Reset User Settings** 후 재시작하여 **Mount storage account(영구)** 선택. state 유실 시 09의 `terraform destroy`가 어긋날 수 있으니 영구 세션에서 다시 진행 |
+| 클론한 저장소·`terraform.tfvars`·state가 재접속 후 사라짐 | Cloud Shell을 **임시(ephemeral) 세션**으로 시작(20분 무활동 시 자동 로그아웃·호스트 재활용) | 세션 시작 시 "ephemeral storage" 안내가 보였는지 확인 | **설정 → Reset User Settings** 후 재시작하여 **Mount storage account(영구)** 선택. state 유실 시 10의 `terraform destroy`가 어긋날 수 있으니 영구 세션에서 다시 진행 |
 | AMW/Grafana 생성 실패(`LocationNotAvailable`) | 선택 리전에서 서비스 미제공 | [지역별 가용성](https://azure.microsoft.com/explore/global-infrastructure/products-by-region/) 확인 | 지원 리전(예: `koreacentral`, `eastus`)으로 `location` 변경 |
 
 다음: [02. 인프라 프로비저닝](02-provision-terraform.md)

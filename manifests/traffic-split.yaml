@@ -1,0 +1,99 @@
+# 06. Gateway API 트래픽 분할 데모
+# 05의 store-gateway(공인 IP 1개)를 그대로 재사용하고, '/split' 경로로만 데모를
+# 분기합니다. 기존 '/'(store-front)는 그대로 두므로 같은 IP에서 충돌 없이 공존합니다.
+# 브라우저로 http://<store-IP>/split 을 열고 새로고침하면 v1/v2가 번갈아 보입니다.
+#
+# 백엔드 두 개(hello-v1 / hello-v2)는 동일 이미지에 TITLE만 다르게 주어
+# 어떤 버전이 응답했는지 본문으로 구분합니다. 요청량(requests)을 낮게 잡아
+# 기존 노드에 스케줄되며 NAP 노드 증설을 유발하지 않습니다.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-v1
+  namespace: pets
+  labels: { app: hello, version: v1 }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hello, version: v1 }
+  template:
+    metadata:
+      labels: { app: hello, version: v1 }
+    spec:
+      containers:
+        - name: hello
+          image: mcr.microsoft.com/azuredocs/aks-helloworld:v1
+          ports: [{ containerPort: 80 }]
+          env:
+            - name: TITLE
+              value: "Traffic Split Demo - V1"
+          resources:
+            requests: { cpu: 20m, memory: 48Mi }
+            limits: { cpu: 100m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-v1
+  namespace: pets
+spec:
+  selector: { app: hello, version: v1 }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-v2
+  namespace: pets
+  labels: { app: hello, version: v2 }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hello, version: v2 }
+  template:
+    metadata:
+      labels: { app: hello, version: v2 }
+    spec:
+      containers:
+        - name: hello
+          image: mcr.microsoft.com/azuredocs/aks-helloworld:v1
+          ports: [{ containerPort: 80 }]
+          env:
+            - name: TITLE
+              value: "Traffic Split Demo - V2"
+          resources:
+            requests: { cpu: 20m, memory: 48Mi }
+            limits: { cpu: 100m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-v2
+  namespace: pets
+spec:
+  selector: { app: hello, version: v2 }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: hello-split
+  namespace: pets
+spec:
+  parentRefs:
+    - name: store-gateway          # 05에서 만든 Gateway 재사용(같은 공인 IP)
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: /split }   # '/split'만 데모로 분기(스토어 '/'는 그대로)
+      filters:
+        - type: URLRewrite                              # 백엔드는 '/'에서 동작 → 접두사 /split 제거
+          urlRewrite:
+            path: { type: ReplacePrefixMatch, replacePrefixMatch: / }
+      backendRefs:
+        - name: hello-v1
+          port: 80
+          weight: 50               # 50%
+        - name: hello-v2
+          port: 80
+          weight: 50               # 50%

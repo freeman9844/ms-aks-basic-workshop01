@@ -1,5 +1,7 @@
 # 02. 인프라 프로비저닝 (Terraform)
 
+> 🟢 **실행** = 직접 입력·수행 · 👁️ **예시** = 눈으로만(개념/발췌) · 📋 **예상 출력** = 비교용(입력 불필요)
+
 이 모듈에서는 `terraform/` 폴더의 코드를 **파일별로 먼저 읽고 이해한 뒤** 실제로 적용합니다. 그냥 `apply`만 하지 않고, 각 리소스가 왜 필요한지·어떤 옵션이 핵심인지 짚어 봅니다.
 
 ## 0) Terraform 파일 구조 이해
@@ -45,7 +47,7 @@ provider "azurerm" {
 ```
 
 - `required_version` / `version`: Terraform과 Provider 버전을 고정해 **재현 가능한** 인프라를 보장합니다. `~> 4.0`은 4.x 최신을 허용(5.0 미만).
-- `azurerm`: Azure 리소스를 다루는 공식 Provider. `features {}`는 필수 블록입니다. 여기서 **`resource_group.prevent_deletion_if_contains_resources = false`** 를 설정해, 모듈 09 `terraform destroy` 시 **CLI가 만든 메트릭 파이프라인(MSProm DCE/DCR + 레코딩 룰)** 처럼 Terraform state 밖의 자원이 워크로드 RG에 남아 있어도 RG 삭제가 막히지 않게 합니다.
+- `azurerm`: Azure 리소스를 다루는 공식 Provider. `features {}`는 필수 블록입니다. 여기서 **`resource_group.prevent_deletion_if_contains_resources = false`** 를 설정해, 모듈 10 `terraform destroy` 시 **CLI가 만든 메트릭 파이프라인(MSProm DCE/DCR + 레코딩 룰)** 처럼 Terraform state 밖의 자원이 워크로드 RG에 남아 있어도 RG 삭제가 막히지 않게 합니다.
 - `random`: 리소스 이름 충돌을 피하기 위한 난수 생성용(아래 `main.tf`에서 사용).
 - 인증 정보는 코드에 두지 않습니다. Cloud Shell에 이미 로그인된 `az` 세션을 자동으로 사용합니다.
 
@@ -88,6 +90,7 @@ output "get_credentials_command"    { ... }
 
 > 📁 이후 이 모듈의 모든 명령은 **`terraform` 디렉터리에서 실행**합니다. 아래에서 한 번 이동하면 모듈 끝까지 같은 디렉터리를 유지합니다.
 
+🟢 **실행**
 ```bash
 cd ~/ms-aks-basic-workshop01/terraform
 terraform plan
@@ -143,6 +146,7 @@ Changes to Outputs:
 
 RG 3종, VNet/Subnet, ACR, Log Analytics, Azure Monitor Workspace, Grafana를 만듭니다(모두 AKS에 의존하지 않음). `random_integer`는 의존성으로 자동 포함됩니다.
 
+🟢 **실행**
 ```bash
 terraform apply \
   -target=azurerm_resource_group.network \
@@ -225,7 +229,7 @@ resource "azurerm_dashboard_grafana" "this" {
 - **Managed Grafana**: 시각화 대시보드. `azure_monitor_workspace_integrations`로 위 AMW를 데이터소스로 연결합니다.
 - `SystemAssigned` 관리 ID: Grafana가 AMW에서 메트릭을 읽을 때 사용(아래 역할 할당과 연결).
 
-> 💡 **`MA_<amw 이름>_<region>_managed` RG가 따로 생기는 건 정상입니다.** AMW를 만들면 Azure가 **기본 DCE/DCR**(데이터 수집 엔드포인트/규칙)을 담는 **플랫폼 관리형 RG**(`MA_..._managed`)를 **자동 생성**합니다. 이 RG의 이름·위치는 **플랫폼이 고정**하므로, 모니터링 RG 등 **내가 지정한 RG로 옮기거나 이름을 바꿀 수 없습니다(설계상 제약)**. 이 RG와 내부 리소스는 **AMW를 삭제하면 함께 자동 삭제**되므로, 모듈 09의 `terraform destroy`로 AMW가 지워지면 정리됩니다(별도 수동 삭제 불필요).
+> 💡 **`MA_<amw 이름>_<region>_managed` RG가 따로 생기는 건 정상입니다.** AMW를 만들면 Azure가 **기본 DCE/DCR**(데이터 수집 엔드포인트/규칙)을 담는 **플랫폼 관리형 RG**(`MA_..._managed`)를 **자동 생성**합니다. 이 RG의 이름·위치는 **플랫폼이 고정**하므로, 모니터링 RG 등 **내가 지정한 RG로 옮기거나 이름을 바꿀 수 없습니다(설계상 제약)**. 이 RG와 내부 리소스는 **AMW를 삭제하면 함께 자동 삭제**되므로, 모듈 10의 `terraform destroy`로 AMW가 지워지면 정리됩니다(별도 수동 삭제 불필요).
 >
 > - **"AMW를 미리 만들어 지정하면 안 생기나요?"** — 아니요. 이 `MA_` RG는 **AMW를 만드는 그 순간** 생성됩니다(AKS가 연결될 때가 아님). 이 워크숍은 이미 AMW를 **미리(`azurerm_monitor_workspace.this`)** 만들어 모니터링 RG에 두지만, 그 생성 시점에 `MA_` RG가 함께 생깁니다. 즉 **AMW 1개당 `MA_` RG 1개**는 누가/어디에 만들든 항상 따라오며, 이를 억제하거나 다른 RG로 보내는 옵션은 없습니다.
 > - 조직에 RG/리소스 **이름 규칙 정책**이 있어 이 RG 생성이 막히면, 해당 RG에 대한 **정책 예외(exemption)** 를 만드세요.
@@ -244,6 +248,7 @@ Apply complete! Resources: 10 added, 0 changed, 0 destroyed.
 
 > ⚠️ **여러 사람이 같은 구독에서 작업하는 경우**, 공통 접두사(`aksworkshop`)로 `grep`하면 **다른 사람의 RG까지 섞여** 나옵니다. 이 배포는 이름에 **난수 접미사**(`random_integer.suffix`)가 붙어 전역적으로 고유하므로, 아래처럼 `terraform output`이 알려주는 **내 배포의 정확한 RG 이름**으로 조회하세요.
 
+🟢 **실행**
 ```bash
 # 이 배포의 고유 RG 이름(난수 접미사 포함)을 terraform output에서 읽습니다.
 RG=$(terraform output -raw resource_group_name)
@@ -289,6 +294,7 @@ azurerm_virtual_network.this
 
 AKS 클러스터와, AKS에 의존하는 `aks_acr`·`aks_network` 역할 할당을 만듭니다. AKS 생성이 가장 오래 걸립니다(수 분).
 
+🟢 **실행**
 ```bash
 terraform apply \
   -target=azurerm_kubernetes_cluster.this \
@@ -353,7 +359,7 @@ resource "azurerm_monitor_data_collection_rule_association" "container_insights"
 - **Kubernetes 버전 — AzureRM 기본값 사용**: `aks.tf`에는 `kubernetes_version`을 **명시하지 않았습니다.** 이 경우 AzureRM Provider는 클러스터를 **생성 시점의 AKS 기본(권장) 버전**으로 만듭니다(자동 업그레이드는 아님). 따라서 아래 예상 출력의 버전 문자열은 **실습 시점에 따라 달라집니다**(이 문서 작성 시점 koreacentral 기본값 예: `1.34`). 특정 버전이 필요하면 `kubernetes_version = "1.3x"`를 추가해 고정하세요. 마찬가지로 `sku_tier`(기본 `Free`), `default_node_pool.type`(기본 `VirtualMachineScaleSets`)도 명시하지 않아 Provider 기본값이 적용됩니다.
 - **network_profile**: Azure CNI **Overlay + Cilium**. Overlay는 대규모 Pod에서도 VNet 주소 고갈이 없고, Cilium(eBPF)은 고성능 네트워킹과 **NAP(노드 자동 프로비저닝)** 의 전제 조건입니다. 서비스/Pod CIDR을 명시해 BYO VNet과의 주소 충돌을 방지합니다.
 - **workload_autoscaler_profile.keda_enabled**: KEDA를 클러스터 애드온으로 설치(이벤트 소스 기반 스케일링).
-- **oms_agent**: Container Insights 에이전트(`ama-logs`)를 배포해 컨테이너 로그를 Log Analytics로 보냅니다. **`msi_auth_for_monitoring_enabled = true`** 로 워크스페이스 키 대신 **관리 ID(AAD) 인증 + DCR 기반 온보딩**을 사용합니다. 이때 컨테이너 로그가 레거시 `ContainerLog`(V1)가 아니라 **`ContainerLogV2`** 스키마로 적재됩니다(`PodNamespace`/`PodName`/`LogMessage` 컬럼 제공 — 모듈 08의 KQL 쿼리가 이 스키마를 사용). 이 값을 빼면(레거시 키 인증) 로그가 V1 테이블로 가서 모듈 08의 `ContainerLogV2` 쿼리가 **빈 결과**를 반환합니다.
+- **oms_agent**: Container Insights 에이전트(`ama-logs`)를 배포해 컨테이너 로그를 Log Analytics로 보냅니다. **`msi_auth_for_monitoring_enabled = true`** 로 워크스페이스 키 대신 **관리 ID(AAD) 인증 + DCR 기반 온보딩**을 사용합니다. 이때 컨테이너 로그가 레거시 `ContainerLog`(V1)가 아니라 **`ContainerLogV2`** 스키마로 적재됩니다(`PodNamespace`/`PodName`/`LogMessage` 컬럼 제공 — 모듈 09의 KQL 쿼리가 이 스키마를 사용). 이 값을 빼면(레거시 키 인증) 로그가 V1 테이블로 가서 모듈 09의 `ContainerLogV2` 쿼리가 **빈 결과**를 반환합니다.
   - > ⚠️ **`oms_agent` 블록만으로는 부족합니다 — 로그 DCR을 반드시 함께 선언하세요.** `oms_agent { msi_auth_for_monitoring_enabled = true }` 는 **addon(ama-logs) 활성화 + AAD(MSI) 인증 설정 + LAW 연결**까지만 합니다. **MSI 인증에서는 컨테이너 로그가 '키로 직접 push'가 아니라 DCR(데이터 수집 규칙)을 통해서만** LAW로 전송됩니다. 따라서 위 `azurerm_monitor_data_collection_rule.container_insights`(MSCI DCR) + `..._association`(DCRA)이 **없으면** ama-logs가 로그를 보낼 경로가 없어 **`ContainerLogV2`/`Logs by Volume`이 빈 결과**가 됩니다(반면 메트릭은 별도 `MSProm-...` DCR로 흐르므로 정상 — *메트릭은 나오는데 로그만 안 나오는* 전형적 증상). `enableContainerLogV2 = true`로 stdout/stderr가 V2 스키마로 적재되며, DCRA가 이 DCR을 AKS 클러스터에 붙여 줍니다.
 - **Managed Prometheus(메트릭) + NAP**: 둘 다 클러스터 생성 시점에는 켜지 않고, **배포 마지막 단계의 `az aks update --enable-azure-monitor-metrics --azure-monitor-workspace-resource-id <AMW> --node-provisioning-mode Auto`** 한 줄로 **함께** 활성화합니다. 메트릭은 에이전트(`ama-metrics`) + DCE/DCR/DCRA(+레코딩 룰)를 자동 생성해 위 (참고-3)의 AMW에 연결하고, `--node-provisioning-mode Auto`는 NAP(Karpenter)를 켭니다. `lifecycle.ignore_changes = [monitor_metrics]`는 메트릭 out-of-band 변경을 Terraform이 되돌리지 않게 합니다.
   - > **왜 NAP를 Terraform이 아니라 여기서 켜나요?** 예전에는 NAP를 Terraform(AzAPI)으로 켰지만, 그 경우 **이후의 메트릭 `az aks update`가 클러스터를 전체 PUT으로 왕복하며 `nodeProvisioningProfile`을 누락 → NAP가 기본값 `Manual`로 조용히 되돌아가는** 문제가 있었습니다(mode 미지정 시 기본값은 Manual). 그래서 **메트릭과 NAP를 같은 `az aks update` 한 번(단일 PUT)** 으로 켜서 덮어쓰기를 원천 차단합니다.
@@ -377,6 +383,7 @@ Apply complete! Resources: 3 added, 0 changed, 0 destroyed.
 ```
 
 확인: 클러스터 자격증명을 받아 노드가 `Ready`인지 봅니다. (NAP는 아직 켜지 않았습니다 — 배포 마지막 "3)" 단계에서 메트릭과 함께 켭니다.)
+🟢 **실행**
 ```bash
 eval "$(terraform output -raw get_credentials_command)"
 kubectl get nodes
@@ -395,6 +402,7 @@ aks-system-12345678-vmss000001      Ready    <none>   2m    v1.34.x
 
 남은 Grafana 역할 할당과 **Container Insights 로그용 DCR/DCRA**를 만들고, **대상 없이 실행해 전체 구성을 최종 수렴**합니다.
 
+🟢 **실행**
 ```bash
 terraform apply -auto-approve
 ```
@@ -427,6 +435,7 @@ resource_group_name = "rg-aksworkshop-aks-dev-krc-12345"
 ```
 
 확인: 최종적으로 모든 리소스가 존재하고, 추가 변경이 없어야 합니다.
+🟢 **실행**
 ```bash
 terraform state list        # 모든 리소스가 보이는지 확인
 terraform plan              # 'No changes' 가 나오면 전체 수렴 완료
@@ -456,6 +465,7 @@ No changes. Your infrastructure matches the configuration.
 
 인프라(2단계 또는 맨 끝의 az CLI 옵션)가 모두 만들어진 **마지막 단계**에서, AKS에 **NAP(노드 자동 프로비저닝)와 Managed Prometheus 메트릭 수집**을 **한 번의 `az aks update`** 로 함께 켭니다. `--enable-azure-monitor-metrics`는 메트릭 에이전트(`ama-metrics`)와 **수집 파이프라인(DCE/DCR/DCRA + 레코딩 룰)** 을 자동 생성해 `--azure-monitor-workspace-resource-id`로 지정한 **Azure Monitor Workspace(AMW)** 로 보내고, `--node-provisioning-mode Auto`는 **NAP(Karpenter)** 를 켭니다.
 
+🟢 **실행**
 ```bash
 RG=$(terraform output -raw resource_group_name)
 AKS=$(terraform output -raw aks_cluster_name)
@@ -470,7 +480,7 @@ az aks update -g "$RG" -n "$AKS" \
 - 이 단계는 **인프라 생성 이후 한 번만** 수행합니다(클러스터 in-place 업데이트라 수 분 소요).
 - `--node-provisioning-mode Auto`는 Cilium 데이터플레인이 전제 조건이며 위 (참고-4)에서 충족했습니다. NAP가 GA라 이 인자는 core Azure CLI로 동작합니다(별도 확장 불필요).
 - Terraform의 `azurerm_kubernetes_cluster.this`에는 `lifecycle { ignore_changes = [monitor_metrics] }`가 있어, 이후 `terraform apply`가 이 CLI 활성화를 **되돌리지 않습니다**. (NAP는 AzureRM이 관리하는 속성이 아니므로 드리프트가 발생하지 않습니다.)
-- **CLI가 만든 메트릭 파이프라인**(MSProm DCE/DCR + Prometheus 레코딩 룰 6종)은 Terraform state 밖에 있으며 **워크로드 RG**(`rg-<workload>-aks-...`)에 생성됩니다(모니터링 RG가 아닙니다). `terraform destroy`가 이 RG(`azurerm_resource_group.workload`)를 삭제하면 RG 안의 자원으로 **함께 제거(cascade)** 됩니다. `providers.tf`의 `prevent_deletion_if_contains_resources = false`는 워크로드 RG에 Terraform이 모르는 자원이 남아 있어도 RG 삭제가 막히지 않게 해 줍니다(자세한 내용은 모듈 09 참고).
+- **CLI가 만든 메트릭 파이프라인**(MSProm DCE/DCR + Prometheus 레코딩 룰 6종)은 Terraform state 밖에 있으며 **워크로드 RG**(`rg-<workload>-aks-...`)에 생성됩니다(모니터링 RG가 아닙니다). `terraform destroy`가 이 RG(`azurerm_resource_group.workload`)를 삭제하면 RG 안의 자원으로 **함께 제거(cascade)** 됩니다. `providers.tf`의 `prevent_deletion_if_contains_resources = false`는 워크로드 RG에 Terraform이 모르는 자원이 남아 있어도 RG 삭제가 막히지 않게 해 줍니다(자세한 내용은 모듈 10 참고).
   - 반면 **Container Insights 로그용 DCR(`MSCI-...`)+DCRA는 Terraform이 직접 관리**(2.3에서 생성)하므로 destroy 시 **명시적으로 삭제**됩니다(cascade 의존 아님). 메트릭 DCRA는 AKS 클러스터 스코프의 자식 자원이라 **클러스터 삭제와 함께 제거**됩니다.
 
 예상 출력(끝부분): 업데이트가 완료되면 클러스터 JSON이 반환되고, `azureMonitorProfile.metrics.enabled`가 `true`입니다.
@@ -489,6 +499,7 @@ az aks update -g "$RG" -n "$AKS" \
 ```
 
 확인: 메트릭 에이전트가 기동했는지, NAP가 `Auto`로 켜졌는지 함께 봅니다.
+🟢 **실행**
 ```bash
 kubectl get pods -n kube-system | grep ama-metrics   # ama-metrics-* 가 Running 예상
 az aks show -g "$RG" -n "$AKS" --query azureMonitorProfile.metrics.enabled -o tsv   # true 예상
@@ -517,6 +528,7 @@ Auto
 
 아래 명령으로 애드온·NAP 활성화 결과를 확인하고, 모든 항목을 체크한 뒤 [03. 컨테이너 이미지 빌드](03-build-images.md)로 진행하세요.
 
+🟢 **실행**
 ```bash
 # 검증을 위해 kubeconfig를 먼저 연결합니다(클러스터 접속 단계는 모듈 04에서 자세히 다룹니다).
 eval "$(terraform output -raw get_credentials_command)"

@@ -1,0 +1,81 @@
+# (09.1 옵션) Application Map 보강용 트래픽 프로브
+# - pets 네임스페이스의 Instrumentation/default(NodeJs) 덕분에 이 Node.js Pod도 자동 계측됩니다.
+# - 내부 서비스로 HTTP를 주기 호출 → order-service(계측됨)와는 서비스-투-서비스 엣지,
+#   product/makeline/store-front(미계측)와는 의존성 노드로 Application Map에 표시됩니다.
+# - 공개 node:20-alpine 이미지만 사용(앱 빌드 불필요). 모두 GET /health 라 부작용(주문 생성) 없음.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: appmap-probe-script
+  namespace: pets
+data:
+  probe.js: |
+    // 내부 서비스로 주기적 HTTP 호출 → Application Map 토폴로지 생성
+    // 코어 http 모듈 사용(전역 fetch/undici는 자동 계측이 잡지 못하는 경우가 있어 회피)
+    const http = require('http');
+    const TARGETS = [
+      'http://order-service:3000/health',    // 계측됨(Node) → 서비스-투-서비스 엣지
+      'http://product-service:3002/health',  // 미계측(Rust) → 의존성 노드
+      'http://makeline-service:3001/health', // 미계측(Go)   → 의존성 노드
+      'http://store-front:80/',              // 미계측(nginx)→ 의존성 노드
+    ];
+    function hit(url) {
+      return new Promise((resolve) => {
+        const req = http.get(url, (res) => {
+          res.on('data', () => {});
+          res.on('end', () => {
+            console.log(new Date().toISOString(), url, res.statusCode);
+            resolve();
+          });
+        });
+        req.on('error', (e) => {
+          console.log(new Date().toISOString(), url, 'ERR', e.message);
+          resolve();
+        });
+        req.setTimeout(5000, () => { req.destroy(); resolve(); });
+      });
+    }
+    async function tick() {
+      for (const url of TARGETS) { await hit(url); }
+    }
+    setInterval(tick, 3000);
+    tick();
+    console.log('appmap-probe started (http module)');
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: appmap-probe
+  namespace: pets
+  labels:
+    app: appmap-probe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: appmap-probe
+  template:
+    metadata:
+      labels:
+        app: appmap-probe
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+        - name: appmap-probe
+          image: node:20-alpine
+          command: ["node", "/app/probe.js"]
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: script
+          configMap:
+            name: appmap-probe-script

@@ -1,0 +1,19 @@
+# 애플리케이션 자동 계측(Auto-instrumentation) 설정
+#
+# 이 Custom Resource(CR)는 AKS 자동 계측 기능이 "어떤 언어를, 어디로 보낼지"를
+# 정의합니다. metadata.name 을 'default' 로 두면 같은 네임스페이스(pets)의 모든
+# Deployment 가 지정 언어(NodeJs)에 대해 네임스페이스 단위로 자동 계측됩니다.
+#
+# ⚠️ applicationInsightsConnectionString 은 본인 Application Insights 리소스의
+#    실제 연결 문자열로 바꿔야 합니다(문서 09.1의 1)단계에서 발급).
+apiVersion: monitor.azure.com/v1
+kind: Instrumentation
+metadata:
+  name: default              # 'default' = 네임스페이스 전체 적용(Java/Node.js만 지원)
+  namespace: pets            # 애플리케이션 Pod 와 같은 네임스페이스
+spec:
+  settings:
+    autoInstrumentationPlatforms:
+      - NodeJs                # order-service(Javascript/Node.js) 대상. 필요 시 - Java 추가
+  destination:               # 필수: 텔레메트리 수신 대상
+    applicationInsightsConnectionString: "REPLACE_WITH_YOUR_CONNECTION_STRING"
