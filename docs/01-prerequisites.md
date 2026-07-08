@@ -222,7 +222,7 @@ CurrentValue    Limit    LocalName
 
 🟢 **실행**
 ```bash
-git clone https://github.com/jungwoonlee_microsoft/ms-aks-basic-workshop01.git
+git clone https://github.com/freeman9844/ms-aks-basic-workshop01.git
 cd ms-aks-basic-workshop01/terraform
 cp terraform.tfvars.example terraform.tfvars
 terraform init
